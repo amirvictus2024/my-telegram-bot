@@ -23,29 +23,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ------------------ تنظیم مسیر ذخیره داده‌ها ------------------
+DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
 # ------------------ توابع Pickle (ذخیره/بازیابی) ------------------
 def load_balance():
     global user_balance
-    if os.path.exists("balance.pkl"):
-        with open("balance.pkl", "rb") as f:
+    file_path = os.path.join(DATA_DIR, "balance.pkl")
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
             user_balance = pickle.load(f)
     else:
         user_balance = {}
 
 def save_balance():
-    with open("balance.pkl", "wb") as f:
+    file_path = os.path.join(DATA_DIR, "balance.pkl")
+    with open(file_path, "wb") as f:
         pickle.dump(user_balance, f)
 
 def load_history():
     global purchase_history
-    if os.path.exists("history.pkl"):
-        with open("history.pkl", "rb") as f:
+    file_path = os.path.join(DATA_DIR, "history.pkl")
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
             purchase_history = pickle.load(f)
     else:
         purchase_history = {}
 
 def save_history():
-    with open("history.pkl", "wb") as f:
+    file_path = os.path.join(DATA_DIR, "history.pkl")
+    with open(file_path, "wb") as f:
         pickle.dump(purchase_history, f)
 
 # ------------------ متغیرهای سراسری ------------------
