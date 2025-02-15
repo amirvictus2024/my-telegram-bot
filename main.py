@@ -4,16 +4,17 @@ import random
 import ipaddress
 import pickle
 import os
-import time
+import asyncio
 import io
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
-    Updater,
+    ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ContextTypes,
     filters,
-    CallbackContext,
 )
 
 # ------------------ تنظیمات لاگینگ ------------------
@@ -31,9 +32,11 @@ def load_balance():
     else:
         user_balance = {}
 
+
 def save_balance():
     with open("balance.pkl", "wb") as f:
         pickle.dump(user_balance, f)
+
 
 def load_history():
     global purchase_history
@@ -43,16 +46,20 @@ def load_history():
     else:
         purchase_history = {}
 
+
 def save_history():
     with open("history.pkl", "wb") as f:
         pickle.dump(purchase_history, f)
+
 
 # ------------------ متغیرهای سراسری ------------------
 admin_ids = {7240662021}
 ADMIN_PASSWORD = "1"
 
 user_balance = {}  # {user_id: amount}
-purchase_history = {}  # { user_id: [ {type, plan, ip1, ip2, ipv6_1, ipv6_2, cost, discount, timestamp}, ... ] }
+purchase_history = (
+    {}
+)  # { user_id: [ {type, plan, ip1, ip2, ipv6_1, ipv6_2, cost, discount, timestamp}, ... ] }
 pending_receipts = {}  # { user_id: { ... } }
 receipt_photos = {}
 pending_balance_requests = {}  # { user_id: amount }
@@ -87,7 +94,7 @@ DNS_CONFIGS = {
             "213.132.32.0/19",
         ],
         "flag": "🇦🇪",
-        "ipv6_prefix": "2a02:2ae8"  # پیش‌فرض قابل تغییر
+        "ipv6_prefix": "2a02:2ae8",
     },
     "آلمان1": {
         "name": "سرور آلمان 1",
@@ -105,7 +112,7 @@ DNS_CONFIGS = {
             "217.80.0.0/12",
         ],
         "flag": "🇩🇪",
-        "ipv6_prefix": "2a02:2ae8"  # طبق درخواست
+        "ipv6_prefix": "2a02:2ae8",
     },
     "ترکیه": {
         "name": "سرور ترکیه",
@@ -133,7 +140,7 @@ DNS_CONFIGS = {
             "78.165.216.0/24",
         ],
         "flag": "🇹🇷",
-        "ipv6_prefix": "2a02:2ae8"
+        "ipv6_prefix": "2a02:2ae8",
     },
 }
 
@@ -215,6 +222,7 @@ def generate_dns_ip_pair(plan_id: str):
     ip2 = str(ipaddress.IPv4Address(ip_ints[1]))
     return ip1, ip2
 
+
 def generate_dns_ipv6_pair(plan_id: str):
     config = DNS_CONFIGS.get(plan_id, {})
     ipv6_prefix = config.get("ipv6_prefix", "2001:db8")
@@ -224,57 +232,81 @@ def generate_dns_ipv6_pair(plan_id: str):
     ipv6_2 = f"{ipv6_prefix}:{seg2}:{seg3}::0"
     return ipv6_1, ipv6_2
 
+
 # ------------------ منوهای اصلی ------------------
-def show_main_menu(update: Update, context: CallbackContext) -> None:
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = "🏠 منوی اصلی:"
     user_id = update.effective_user.id
     is_admin = user_id in admin_ids
     rows = []
     if is_admin or ENABLE_DNS_BUTTON:
-        rows.append([InlineKeyboardButton("🛒 خرید DNS اختصاصی", callback_data="dns_menu")])
+        rows.append(
+            [InlineKeyboardButton("🛒 خرید DNS اختصاصی", callback_data="dns_menu")]
+        )
     row = []
     if is_admin or ENABLE_ACCOUNT_BUTTON:
         row.append(InlineKeyboardButton("👤 حساب کاربری", callback_data="account_menu"))
     if is_admin or ENABLE_REFERRAL_BUTTON:
-        row.append(InlineKeyboardButton("🔗 رفرال و امتیاز", callback_data="referral_menu"))
+        row.append(
+            InlineKeyboardButton("🔗 رفرال و امتیاز", callback_data="referral_menu")
+        )
     if row:
         rows.append(row)
     row = []
     row.append(InlineKeyboardButton("📞 پشتیبانی", callback_data="support_menu"))
     if is_admin or ENABLE_WIREGUARD_BUTTON:
-        row.append(InlineKeyboardButton("🔑 وایرگارد اختصاصی", callback_data="wireguard_menu"))
+        row.append(
+            InlineKeyboardButton("🔑 وایرگارد اختصاصی", callback_data="wireguard_menu")
+        )
     if row:
         rows.append(row)
     row = []
     if is_admin or ENABLE_BALANCE_BUTTON:
-        row.append(InlineKeyboardButton("💳 افزایش موجودی", callback_data="balance_increase"))
+        row.append(
+            InlineKeyboardButton("💳 افزایش موجودی", callback_data="balance_increase")
+        )
     if is_admin or ENABLE_SITE_SUBSCRIPTION_BUTTON:
-        row.append(InlineKeyboardButton("💻 خرید یوزرپسورد سایت", callback_data="site_subscription_menu"))
+        row.append(
+            InlineKeyboardButton(
+                "💻 خرید یوزرپسورد سایت", callback_data="site_subscription_menu"
+            )
+        )
     if row:
         rows.append(row)
     if is_admin:
-        rows.append([InlineKeyboardButton("⚙️ پنل ادمین", callback_data="admin_panel_menu")])
+        rows.append(
+            [InlineKeyboardButton("⚙️ پنل ادمین", callback_data="admin_panel_menu")]
+        )
     rows.append([InlineKeyboardButton("📜 قوانین و مقررات", callback_data="terms")])
-    rows.append([InlineKeyboardButton("🌐 مینی اپ", web_app=WebAppInfo(url="https://amir-xknow.pages.dev/"))])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "🌐 مینی اپ", web_app=WebAppInfo(url="https://amir-xknow.pages.dev/")
+            )
+        ]
+    )
     keyboard_main = InlineKeyboardMarkup(rows)
     if update.callback_query:
-        update.callback_query.edit_message_text(text, reply_markup=keyboard_main)
+        await update.callback_query.edit_message_text(text, reply_markup=keyboard_main)
     else:
-        update.message.reply_text(text, reply_markup=keyboard_main)
+        await update.message.reply_text(text, reply_markup=keyboard_main)
 
-def start(update: Update, context: CallbackContext) -> None:
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id = user.id
     if BOT_UPDATING:
-        update.message.reply_text("⚠️ ربات در حال بروزرسانی می‌باشد. لطفاً بعداً تلاش کنید.")
+        await update.message.reply_text(
+            "⚠️ ربات در حال بروزرسانی می‌باشد. لطفاً بعداً تلاش کنید."
+        )
         return
     if user_id in blocked_users:
-        update.message.reply_text("❌ شما توسط مدیریت مسدود شده‌اید.")
+        await update.message.reply_text("❌ شما توسط مدیریت مسدود شده‌اید.")
         return
     all_users.add(user_id)
     if FORCE_JOIN_ENABLED and FORCE_JOIN_CHANNEL:
         try:
-            member = context.bot.get_chat_member(FORCE_JOIN_CHANNEL, user_id)
+            member = await context.bot.get_chat_member(FORCE_JOIN_CHANNEL, user_id)
             if member.status not in ["member", "creator", "administrator"]:
                 if FORCE_JOIN_CHANNEL.startswith("@"):
                     channel_url = f"https://t.me/{FORCE_JOIN_CHANNEL[1:]}"
@@ -283,7 +315,7 @@ def start(update: Update, context: CallbackContext) -> None:
                 keyboard = InlineKeyboardMarkup(
                     [[InlineKeyboardButton("عضویت", url=channel_url)]]
                 )
-                update.message.reply_text(
+                await update.message.reply_text(
                     f"❌ لطفاً ابتدا در کانال {FORCE_JOIN_CHANNEL} عضو شوید.",
                     reply_markup=keyboard,
                 )
@@ -301,36 +333,41 @@ def start(update: Update, context: CallbackContext) -> None:
     text = f"سلام {user.first_name}!\nبه ربات خدمات DNS اختصاصی خوش آمدید."
     keyboard = [[InlineKeyboardButton("🏠 منوی اصلی", callback_data="main_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(text, reply_markup=reply_markup)
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
 
 # ------------------ منوی DNS اختصاصی ------------------
-def dns_menu(update: Update, context: CallbackContext) -> None:
+async def dns_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
-    query.edit_message_text(
+    await query.answer()
+    await query.edit_message_text(
         "لطفاً لوکیشن DNS اختصاصی را انتخاب کنید:",
         reply_markup=build_dns_selection_menu(),
     )
+
 
 def build_dns_selection_menu():
     keyboard = []
     for plan_id, config in DNS_CONFIGS.items():
         keyboard.append(
-            [InlineKeyboardButton(
-                f"{config['flag']} {config['name']} - {config['price']:,} تومان",
-                callback_data=f"buy_dnsplan_{plan_id}"
-            )]
+            [
+                InlineKeyboardButton(
+                    f"{config['flag']} {config['name']} - {config['price']:,} تومان",
+                    callback_data=f"buy_dnsplan_{plan_id}",
+                )
+            ]
         )
     keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-def buy_dns_plan(update: Update, context: CallbackContext) -> None:
+
+async def buy_dns_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     parts = data.split("_")
     if len(parts) < 3:
-        query.edit_message_text("❌ خطا در ثبت خرید DNS.")
+        await query.edit_message_text("❌ خطا در ثبت خرید DNS.")
         return
     plan_id = parts[2]
     user_id = query.from_user.id
@@ -346,16 +383,20 @@ def buy_dns_plan(update: Update, context: CallbackContext) -> None:
         discount_text = ""
     balance = user_balance.get(user_id, 0)
     if balance < final_cost:
-        query.edit_message_text("❌ موجودی شما کافی نیست. لطفاً ابتدا موجودی خود را افزایش دهید.")
+        await query.edit_message_text(
+            "❌ موجودی شما کافی نیست. لطفاً ابتدا موجودی خود را افزایش دهید."
+        )
         return
     user_balance[user_id] = balance - final_cost
     save_balance()
-    context.bot.send_message(chat_id=user_id, text="😊 موجودی شما کافی است!")
-    query.edit_message_text("⏳ در حال پردازش، لطفاً کمی صبر کنید...")
-    time.sleep(1)
+    await context.bot.send_message(chat_id=user_id, text="😊 موجودی شما کافی است!")
+    await query.edit_message_text("⏳ در حال پردازش، لطفاً کمی صبر کنید...")
+    await asyncio.sleep(1)
     ip1, ip2 = generate_dns_ip_pair(plan_id)
     if not ip1 or not ip2:
-        query.edit_message_text("❌ خطا در تولید آی‌پی‌ها. لطفاً دوباره تلاش کنید.")
+        await query.edit_message_text(
+            "❌ خطا در تولید آی‌پی‌ها. لطفاً دوباره تلاش کنید."
+        )
         return
     ipv6_1, ipv6_2 = generate_dns_ipv6_pair(plan_id)
     dns_caption = (
@@ -376,7 +417,7 @@ def buy_dns_plan(update: Update, context: CallbackContext) -> None:
         f"💸 مبلغ کسر شده: {final_cost:,} تومان{discount_text}\n\n"
         f"{dns_caption}"
     )
-    query.edit_message_text(final_text, parse_mode="HTML")
+    await query.edit_message_text(final_text, parse_mode="HTML")
     record = {
         "type": "dns",
         "plan": plan_id,
@@ -394,27 +435,35 @@ def buy_dns_plan(update: Update, context: CallbackContext) -> None:
         purchase_history[user_id] = [record]
     save_history()
 
+
 # ------------------ منوی وایرگارد اختصاصی ------------------
-def wireguard_menu(update: Update, context: CallbackContext) -> None:
+async def wireguard_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     text = "برای خرید وایرگارد اختصاصی لطفاً با پشتیبانی تماس بگیرید:\n@SupportUsername"
-    # توجه: قیمت حذف شده است
     keyboard = [[InlineKeyboardButton("🏠 منوی اصلی", callback_data="main_menu")]]
-    query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 # ------------------ منوی قوانین و مقررات ------------------
-def terms_and_conditions(update: Update, context: CallbackContext) -> None:
+async def terms_and_conditions(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     formatted_terms = TERMS_TEXT.format(support=SUPPORT_ID)
     keyboard = [[InlineKeyboardButton("🏠 منوی اصلی", callback_data="main_menu")]]
-    query.edit_message_text(formatted_terms, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    await query.edit_message_text(
+        formatted_terms, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML"
+    )
+
 
 # ------------------ منوی خرید یوزرپسورد سایت ------------------
-def site_subscription_menu(update: Update, context: CallbackContext) -> None:
+async def site_subscription_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     text = "💻 خرید یوزرپسورد سایت:\nلطفاً پلن مورد نظر را انتخاب کنید:"
     buttons = []
     for plan_key, plan_info in SITE_SUBSCRIPTION_PLANS.items():
@@ -424,30 +473,35 @@ def site_subscription_menu(update: Update, context: CallbackContext) -> None:
                 callback_data=f"buy_site_subscription_{plan_key}",
             )
         )
-    keyboard = InlineKeyboardMarkup(InlineKeyboardMarkup(buttons).inline_keyboard)
-    # استفاده از دکمه‌های تنظیم شده به صورت دستی:
-    keyboard = InlineKeyboardMarkup(InlineKeyboardMarkup([[b] for b in buttons]).inline_keyboard)
-    keyboard.inline_keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
-    query.edit_message_text(text, reply_markup=keyboard)
+    keyboard = InlineKeyboardMarkup([[button] for button in buttons])
+    keyboard.inline_keyboard.append(
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+    )
+    await query.edit_message_text(text, reply_markup=keyboard)
 
-def buy_site_subscription(update: Update, context: CallbackContext) -> None:
+
+async def buy_site_subscription(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     parts = data.split("_")
     if len(parts) < 4:
-        query.edit_message_text("❌ خطا در انتخاب پلن.")
+        await query.edit_message_text("❌ خطا در انتخاب پلن.")
         return
     plan_key = parts[3]
     if plan_key not in SITE_SUBSCRIPTION_PLANS:
-        query.edit_message_text("❌ پلن نامعتبر.")
+        await query.edit_message_text("❌ پلن نامعتبر.")
         return
     plan_info = SITE_SUBSCRIPTION_PLANS[plan_key]
     user_id = query.from_user.id
     cost = plan_info["price"]
     balance = user_balance.get(user_id, 0)
     if balance < cost:
-        query.edit_message_text("❌ موجودی شما کافی نیست. لطفاً ابتدا موجودی خود را افزایش دهید.")
+        await query.edit_message_text(
+            "❌ موجودی شما کافی نیست. لطفاً ابتدا موجودی خود را افزایش دهید."
+        )
         return
     user_balance[user_id] = balance - cost
     save_balance()
@@ -462,7 +516,7 @@ def buy_site_subscription(update: Update, context: CallbackContext) -> None:
         f"🔑 پسورد: {password}\n"
         f"🔖 شناسه: {identifier}\n"
     )
-    query.edit_message_text(text)
+    await query.edit_message_text(text)
     record = {
         "type": "site_subscription",
         "plan": plan_key,
@@ -475,24 +529,45 @@ def buy_site_subscription(update: Update, context: CallbackContext) -> None:
         purchase_history[user_id] = [record]
     save_history()
 
+
 # ------------------ دریافت رسید پرداخت (عکس) ------------------
-def receipt_photo_handler(update: Update, context: CallbackContext) -> None:
+async def receipt_photo_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     user_id = update.effective_user.id
     if user_id in pending_balance_requests:
         pending_balance_receipts[user_id] = update.message.photo[-1].file_id
-        keyboard = [[InlineKeyboardButton("💳 ارسال درخواست افزایش موجودی", callback_data="balance_request_confirm")]]
-        update.message.reply_text("✅ عکس رسید دریافت شد. برای نهایی کردن درخواست افزایش موجودی روی دکمه مربوطه کلیک کنید.", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "💳 ارسال درخواست افزایش موجودی",
+                    callback_data="balance_request_confirm",
+                )
+            ]
+        ]
+        await update.message.reply_text(
+            "✅ عکس رسید دریافت شد. برای نهایی کردن درخواست افزایش موجودی روی دکمه مربوطه کلیک کنید.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
     elif user_id in pending_receipts:
         receipt_photos[user_id] = update.message.photo[-1].file_id
-        keyboard = [[InlineKeyboardButton("قبول درخواست", callback_data="confirm_receipt")]]
-        update.message.reply_text("✅ عکس رسید دریافت شد. برای نهایی کردن خرید روی دکمه 'قبول درخواست' کلیک کنید.", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [InlineKeyboardButton("قبول درخواست", callback_data="confirm_receipt")]
+        ]
+        await update.message.reply_text(
+            "✅ عکس رسید دریافت شد. برای نهایی کردن خرید روی دکمه 'قبول درخواست' کلیک کنید.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
-def confirm_receipt(update: Update, context: CallbackContext) -> None:
+
+async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     user_id = query.from_user.id
     if user_id not in pending_receipts or user_id not in receipt_photos:
-        query.edit_message_text("❌ رسید شما یافت نشد. لطفاً ابتدا عکس رسید را ارسال کنید.")
+        await query.edit_message_text(
+            "❌ رسید شما یافت نشد. لطفاً ابتدا عکس رسید را ارسال کنید."
+        )
         return
     purchase_info = pending_receipts[user_id]
     photo_file_id = receipt_photos[user_id]
@@ -508,119 +583,164 @@ def confirm_receipt(update: Update, context: CallbackContext) -> None:
         caption = "نوع درخواست نامعتبر."
     for admin in admin_ids:
         try:
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید خرید", callback_data=f"admin_approve_purchase_{user_id}"),
-                                               InlineKeyboardButton("❌ رد خرید", callback_data=f"admin_reject_purchase_{user_id}")]])
-            context.bot.send_photo(chat_id=admin, photo=photo_file_id,
-                                     caption=f"رسید پرداخت از کاربر {user_id}:\n{caption}",
-                                     parse_mode="HTML", reply_markup=keyboard)
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ تایید خرید",
+                            callback_data=f"admin_approve_purchase_{user_id}",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ رد خرید",
+                            callback_data=f"admin_reject_purchase_{user_id}",
+                        ),
+                    ]
+                ]
+            )
+            await context.bot.send_photo(
+                chat_id=admin,
+                photo=photo_file_id,
+                caption=f"رسید پرداخت از کاربر {user_id}:\n{caption}",
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
         except Exception as e:
             logger.error(f"خطا در ارسال رسید به ادمین {admin}: {e}")
-    query.edit_message_text("✅ رسید شما ارسال شد و در انتظار تایید ادمین می‌باشد.")
+    await query.edit_message_text(
+        "✅ رسید شما ارسال شد و در انتظار تایید ادمین می‌باشد."
+    )
+
 
 # ------------------ تایید/رد خرید توسط ادمین ------------------
-def admin_approve_purchase(update: Update, context: CallbackContext) -> None:
+async def admin_approve_purchase(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     parts = data.split("_")
     if len(parts) < 4:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
+            await query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
         else:
-            query.edit_message_text("❌ داده‌های نامعتبر.")
+            await query.edit_message_text("❌ داده‌های نامعتبر.")
         return
     try:
         user_id = int(parts[3])
     except ValueError:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات کاربر.")
+            await query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات کاربر.")
         else:
-            query.edit_message_text("❌ خطا در پردازش اطلاعات کاربر.")
+            await query.edit_message_text("❌ خطا در پردازش اطلاعات کاربر.")
         return
     if user_id not in pending_receipts:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ درخواست خرید یافت نشد.")
+            await query.edit_message_caption(caption="❌ درخواست خرید یافت نشد.")
         else:
-            query.edit_message_text("❌ درخواست خرید یافت نشد.")
+            await query.edit_message_text("❌ درخواست خرید یافت نشد.")
         return
     del pending_receipts[user_id]
     if user_id in receipt_photos:
         del receipt_photos[user_id]
     try:
-        context.bot.send_message(chat_id=user_id, text="✅ خرید شما تایید شد.")
+        await context.bot.send_message(chat_id=user_id, text="✅ خرید شما تایید شد.")
     except Exception as e:
         logger.error(f"خطا در ارسال پیام به کاربر {user_id}: {e}")
     if query.message.photo:
-        query.edit_message_caption(caption="✅ خرید تایید شد.")
+        await query.edit_message_caption(caption="✅ خرید تایید شد.")
     else:
-        query.edit_message_text("✅ خرید تایید شد.")
+        await query.edit_message_text("✅ خرید تایید شد.")
 
-def admin_reject_purchase(update: Update, context: CallbackContext) -> None:
+
+async def admin_reject_purchase(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     parts = data.split("_")
     if len(parts) < 4:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
+            await query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
         else:
-            query.edit_message_text("❌ داده‌های نامعتبر.")
+            await query.edit_message_text("❌ داده‌های نامعتبر.")
         return
     try:
         user_id = int(parts[3])
     except ValueError:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات کاربر.")
+            await query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات کاربر.")
         else:
-            query.edit_message_text("❌ خطا در پردازش اطلاعات کاربر.")
+            await query.edit_message_text("❌ خطا در پردازش اطلاعات کاربر.")
         return
     if user_id not in pending_receipts:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ درخواست خرید یافت نشد.")
+            await query.edit_message_caption(caption="❌ درخواست خرید یافت نشد.")
         else:
-            query.edit_message_text("❌ درخواست خرید یافت نشد.")
+            await query.edit_message_text("❌ درخواست خرید یافت نشد.")
         return
     purchase_info = pending_receipts[user_id]
     user_balance[user_id] = user_balance.get(user_id, 0) + purchase_info["cost"]
     save_balance()
     try:
-        context.bot.send_message(chat_id=user_id,
-                                 text="❌ خرید شما توسط ادمین رد شد. مبلغ کسر شده به حساب شما بازگردانده شد.")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="❌ خرید شما توسط ادمین رد شد. مبلغ کسر شده به حساب شما بازگردانده شد.",
+        )
     except Exception as e:
         logger.error(f"خطا در ارسال پیام به کاربر {user_id}: {e}")
     del pending_receipts[user_id]
     if user_id in receipt_photos:
         del receipt_photos[user_id]
     if query.message.photo:
-        query.edit_message_caption(caption="✅ خرید رد شد. مبلغ به حساب کاربر بازگردانده شد.")
+        await query.edit_message_caption(
+            caption="✅ خرید رد شد. مبلغ به حساب کاربر بازگردانده شد."
+        )
     else:
-        query.edit_message_text("✅ خرید رد شد. مبلغ به حساب کاربر بازگردانده شد.")
+        await query.edit_message_text("✅ خرید رد شد. مبلغ به حساب کاربر بازگردانده شد.")
+
 
 # ------------------ افزایش موجودی ------------------
-def balance_increase_menu(update: Update, context: CallbackContext) -> None:
+async def balance_increase_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     text = "💳 مقدار افزایش موجودی را انتخاب کنید (به تومان):"
     amounts = [10000, 20000, 50000, 100000, 200000, 500000, 1000000]
     keyboard = []
     row = []
     for amt in amounts:
-        row.append(InlineKeyboardButton(f"{amt:,}", callback_data=f"balance_increase_{amt}"))
+        row.append(
+            InlineKeyboardButton(f"{amt:,}", callback_data=f"balance_increase_{amt}")
+        )
         if len(row) == 3:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("✏️ مبلغ دلخواه", callback_data="balance_increase_custom")])
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "✏️ مبلغ دلخواه", callback_data="balance_increase_custom"
+            )
+        ]
+    )
     keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    query.edit_message_text(text, reply_markup=reply_markup)
+    await query.edit_message_text(text, reply_markup=reply_markup)
 
-def ask_custom_balance(update: Update, context: CallbackContext) -> None:
+
+async def ask_custom_balance(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     awaiting_custom_balance[query.from_user.id] = True
-    query.edit_message_text("✏️ لطفاً مبلغ دلخواه (به تومان) را به صورت عددی ارسال کنید:")
+    await query.edit_message_text(
+        "✏️ لطفاً مبلغ دلخواه (به تومان) را به صورت عددی ارسال کنید:"
+    )
+
 
 def show_balance_payment_screen(query, context, amount):
     text = (
@@ -630,71 +750,107 @@ def show_balance_payment_screen(query, context, amount):
         "سپس رسید پرداخت را به صورت عکس ارسال کنید و روی دکمه '💳 ارسال درخواست افزایش موجودی' کلیک کنید."
     )
     keyboard = [
-        [InlineKeyboardButton("💳 ارسال درخواست افزایش موجودی", callback_data="balance_request_confirm")],
+        [
+            InlineKeyboardButton(
+                "💳 ارسال درخواست افزایش موجودی", callback_data="balance_request_confirm"
+            )
+        ],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
+    return text, reply_markup
 
-def handle_balance_increase_request(update: Update, context: CallbackContext) -> None:
+
+async def handle_balance_increase_request(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     if data.startswith("balance_increase_"):
         parts = data.split("_")
         if len(parts) != 3:
-            query.edit_message_text("❌ خطا در انتخاب مبلغ.")
+            await query.edit_message_text("❌ خطا در انتخاب مبلغ.")
             return
         try:
             amount = int(parts[2])
         except ValueError:
-            query.edit_message_text("❌ مقدار نامعتبر.")
+            await query.edit_message_text("❌ مقدار نامعتبر.")
             return
         if amount < 10000 or amount > 1000000:
-            query.edit_message_text("❌ مقدار انتخاب شده خارج از محدوده مجاز است.")
+            await query.edit_message_text("❌ مقدار انتخاب شده خارج از محدوده مجاز است.")
             return
         pending_balance_requests[query.from_user.id] = amount
-        show_balance_payment_screen(query, context, amount)
+        text, reply_markup = show_balance_payment_screen(query, context, amount)
+        await query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode="HTML"
+        )
 
-def balance_request_confirm(update: Update, context: CallbackContext) -> None:
+
+async def balance_request_confirm(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     user_id = query.from_user.id
-    if user_id not in pending_balance_requests or user_id not in pending_balance_receipts:
-        query.edit_message_text("❌ لطفاً ابتدا عکس رسید پرداخت خود را ارسال کنید.")
+    if (
+        user_id not in pending_balance_requests
+        or user_id not in pending_balance_receipts
+    ):
+        await query.edit_message_text(
+            "❌ لطفاً ابتدا عکس رسید پرداخت خود را ارسال کنید."
+        )
         return
     amount = pending_balance_requests[user_id]
     photo_file_id = pending_balance_receipts[user_id]
     for admin in admin_ids:
         try:
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید", callback_data=f"approve_balance_{user_id}_{amount}"),
-                                               InlineKeyboardButton("❌ رد", callback_data=f"reject_balance_{user_id}_{amount}")]])
-            context.bot.send_photo(chat_id=admin, photo=photo_file_id,
-                                     caption=f"درخواست افزایش موجودی از کاربر {user_id}:\nمبلغ: {amount:,} تومان",
-                                     parse_mode="HTML", reply_markup=keyboard)
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ تایید",
+                            callback_data=f"approve_balance_{user_id}_{amount}",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ رد", callback_data=f"reject_balance_{user_id}_{amount}"
+                        ),
+                    ]
+                ]
+            )
+            await context.bot.send_photo(
+                chat_id=admin,
+                photo=photo_file_id,
+                caption=f"درخواست افزایش موجودی از کاربر {user_id}:\nمبلغ: {amount:,} تومان",
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
         except Exception as e:
             logger.error(f"خطا در ارسال رسید افزایش موجودی به ادمین {admin}: {e}")
-    query.edit_message_text("✅ درخواست افزایش موجودی شما ارسال شد و در انتظار تایید ادمین می‌باشد.")
+    await query.edit_message_text(
+        "✅ درخواست افزایش موجودی شما ارسال شد و در انتظار تایید ادمین می‌باشد."
+    )
 
-def approve_balance(update: Update, context: CallbackContext) -> None:
+
+async def approve_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     parts = data.split("_")
     if len(parts) < 4:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
+            await query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
         else:
-            query.edit_message_text("❌ داده‌های نامعتبر.")
+            await query.edit_message_text("❌ داده‌های نامعتبر.")
         return
     try:
         user_id = int(parts[2])
         amount = int(parts[3])
     except Exception:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات.")
+            await query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات.")
         else:
-            query.edit_message_text("❌ خطا در پردازش اطلاعات.")
+            await query.edit_message_text("❌ خطا در پردازش اطلاعات.")
         return
     user_balance[user_id] = user_balance.get(user_id, 0) + amount
     save_balance()
@@ -703,49 +859,60 @@ def approve_balance(update: Update, context: CallbackContext) -> None:
     if user_id in pending_balance_receipts:
         del pending_balance_receipts[user_id]
     if query.message.photo:
-        query.edit_message_caption(caption="✅ درخواست افزایش موجودی تایید شد. موجودی کاربر به حساب اضافه شد.")
+        await query.edit_message_caption(
+            caption="✅ درخواست افزایش موجودی تایید شد. موجودی کاربر به حساب اضافه شد."
+        )
     else:
-        query.edit_message_text("✅ درخواست افزایش موجودی تایید شد. موجودی کاربر به حساب اضافه شد.")
+        await query.edit_message_text(
+            "✅ درخواست افزایش موجودی تایید شد. موجودی کاربر به حساب اضافه شد."
+        )
     try:
-        context.bot.send_message(chat_id=user_id, text="✅ درخواست افزایش موجودی شما تایید شد. موجودی به حساب شما اضافه شد.")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="✅ درخواست افزایش موجودی شما تایید شد. موجودی به حساب شما اضافه شد.",
+        )
     except Exception as e:
         logger.error(f"Error notifying user {user_id}: {e}")
 
-def reject_balance(update: Update, context: CallbackContext) -> None:
+
+async def reject_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     parts = data.split("_")
     if len(parts) < 4:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
+            await query.edit_message_caption(caption="❌ داده‌های نامعتبر.")
         else:
-            query.edit_message_text("❌ داده‌های نامعتبر.")
+            await query.edit_message_text("❌ داده‌های نامعتبر.")
         return
     try:
         user_id = int(parts[2])
         amount = int(parts[3])
     except Exception:
         if query.message.photo:
-            query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات.")
+            await query.edit_message_caption(caption="❌ خطا در پردازش اطلاعات.")
         else:
-            query.edit_message_text("❌ خطا در پردازش اطلاعات.")
+            await query.edit_message_text("❌ خطا در پردازش اطلاعات.")
         return
     if user_id in pending_balance_requests:
         del pending_balance_requests[user_id]
     if user_id in pending_balance_receipts:
         del pending_balance_receipts[user_id]
     if query.message.photo:
-        query.edit_message_caption(caption="✅ درخواست افزایش موجودی رد شد.")
+        await query.edit_message_caption(caption="✅ درخواست افزایش موجودی رد شد.")
     else:
-        query.edit_message_text("✅ درخواست افزایش موجودی رد شد.")
+        await query.edit_message_text("✅ درخواست افزایش موجودی رد شد.")
     try:
-        context.bot.send_message(chat_id=user_id, text="❌ درخواست افزایش موجودی شما رد شد.")
+        await context.bot.send_message(
+            chat_id=user_id, text="❌ درخواست افزایش موجودی شما رد شد."
+        )
     except Exception as e:
         logger.error(f"Error notifying user {user_id}: {e}")
 
+
 # ------------------ بخش حساب کاربری ------------------
-def account_menu(update: Update, context: CallbackContext) -> None:
+async def account_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     balance = user_balance.get(user_id, 0)
     points = referral_points.get(user_id, 0)
@@ -763,7 +930,9 @@ def account_menu(update: Update, context: CallbackContext) -> None:
                 ts = rec["timestamp"].strftime("%Y-%m-%d %H:%M")
             else:
                 ts = rec.get("timestamp", "N/A")
-            plan_name = DNS_CONFIGS.get(rec.get("plan"), {}).get("name", rec.get("plan"))
+            plan_name = DNS_CONFIGS.get(rec.get("plan"), {}).get(
+                "name", rec.get("plan")
+            )
             text += f"• {plan_name} - {rec.get('cost',0):,} تومان - {ts}\n"
             text += f"  IPv4: <code>{rec.get('ip1','N/A')}</code>, <code>{rec.get('ip2','N/A')}</code>\n"
             text += f"  IPv6: <code>{rec.get('ipv6_1','N/A')}</code>, <code>{rec.get('ipv6_2','N/A')}</code>\n"
@@ -777,20 +946,29 @@ def account_menu(update: Update, context: CallbackContext) -> None:
         text += f"\n🎟 کد تخفیف موجود: {code} - {percent}% تخفیف\n"
     keyboard = [
         [InlineKeyboardButton("🎟 اعمال کد تخفیف", callback_data="apply_discount")],
-        [InlineKeyboardButton("💰 تبدیل امتیاز به موجودی", callback_data="convert_referral")],
+        [
+            InlineKeyboardButton(
+                "💰 تبدیل امتیاز به موجودی", callback_data="convert_referral"
+            )
+        ],
         [InlineKeyboardButton("🔗 رفرال و امتیاز", callback_data="referral_menu")],
         [InlineKeyboardButton("🏠 منوی اصلی", callback_data="main_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query:
-        update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        await update.callback_query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode="HTML"
+        )
     else:
-        update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        await update.message.reply_text(
+            text, reply_markup=reply_markup, parse_mode="HTML"
+        )
+
 
 # ------------------ منوی رفرال ------------------
-def referral_menu(update: Update, context: CallbackContext) -> None:
+async def referral_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     user_id = query.from_user.id
     points = referral_points.get(user_id, 0)
     referral_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
@@ -802,15 +980,22 @@ def referral_menu(update: Update, context: CallbackContext) -> None:
         "همچنین می‌توانید امتیازهای خود را با نرخ 1 امتیاز = 1000 تومان به موجودی تبدیل کنید."
     )
     keyboard = [
-        [InlineKeyboardButton("💰 تبدیل امتیاز به موجودی", callback_data="convert_referral")],
+        [
+            InlineKeyboardButton(
+                "💰 تبدیل امتیاز به موجودی", callback_data="convert_referral"
+            )
+        ],
         [InlineKeyboardButton("🏠 منوی اصلی", callback_data="main_menu")],
     ]
-    query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    await query.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML"
+    )
+
 
 # ------------------ منوی پشتیبانی ------------------
-def support_menu(update: Update, context: CallbackContext) -> None:
+async def support_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     text = (
         "📞 اطلاعات پشتیبانی:\n\n"
         "- شماره تماس: 09123456789\n"
@@ -818,66 +1003,113 @@ def support_menu(update: Update, context: CallbackContext) -> None:
         "در صورت نیاز به راهنمایی و پشتیبانی با ما تماس بگیرید."
     )
     keyboard = [[InlineKeyboardButton("🏠 منوی اصلی", callback_data="main_menu")]]
-    query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 # ------------------ بخش اعمال کد تخفیف ------------------
-def apply_discount_prompt(update: Update, context: CallbackContext) -> None:
+async def apply_discount_prompt(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     awaiting_discount_code[query.from_user.id] = True
-    query.edit_message_text("✏️ لطفاً کد تخفیف خود را ارسال کنید:")
+    await query.edit_message_text("✏️ لطفاً کد تخفیف خود را ارسال کنید:")
 
-def handle_discount_code_text(update: Update, context: CallbackContext) -> None:
+
+async def handle_discount_code_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     user_id = update.effective_user.id
     code = update.message.text.strip().upper()
     if code in discount_codes:
         user_discount[user_id] = (code, discount_codes[code])
-        update.message.reply_text(f"✅ کد تخفیف {code} با {discount_codes[code]}% تخفیف اعمال شد.")
+        await update.message.reply_text(
+            f"✅ کد تخفیف {code} با {discount_codes[code]}% تخفیف اعمال شد."
+        )
     else:
-        update.message.reply_text("❌ کد تخفیف نامعتبر است.")
+        await update.message.reply_text("❌ کد تخفیف نامعتبر است.")
     if user_id in awaiting_discount_code:
         del awaiting_discount_code[user_id]
 
+
 # ------------------ پنل ادمین ------------------
-def admin_panel_menu(update: Update, context: CallbackContext) -> None:
+async def admin_panel_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     user_id = query.from_user.id
     if user_id not in admin_ids:
-        query.edit_message_text("❌ دسترسی ندارید.")
+        await query.edit_message_text("❌ دسترسی ندارید.")
         return
     text = "⚙️ پنل ادمین:"
     keyboard = [
-        [InlineKeyboardButton("💰 مدیریت افزایش موجودی", callback_data="admin_pending_balance"),
-         InlineKeyboardButton("💸 تغییر موجودی کاربر", callback_data="admin_modify_balance")],
-        [InlineKeyboardButton("🚫 مسدودسازی کاربر", callback_data="admin_block_user"),
-         InlineKeyboardButton("✅ لغو مسدودسازی کاربر", callback_data="admin_unblock_user")],
+        [
+            InlineKeyboardButton(
+                "💰 مدیریت افزایش موجودی", callback_data="admin_pending_balance"
+            ),
+            InlineKeyboardButton(
+                "💸 تغییر موجودی کاربر", callback_data="admin_modify_balance"
+            ),
+        ],
+        [
+            InlineKeyboardButton("🚫 مسدودسازی کاربر", callback_data="admin_block_user"),
+            InlineKeyboardButton(
+                "✅ لغو مسدودسازی کاربر", callback_data="admin_unblock_user"
+            ),
+        ],
         [InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_mass_message")],
-        [InlineKeyboardButton("🔒 جویین اجباری کانال", callback_data="admin_toggle_force_join"),
-         InlineKeyboardButton("📝 تنظیم کانال اجباری", callback_data="admin_set_force_channel")],
-        [InlineKeyboardButton("⚙️ تنظیم دکمه‌ها", callback_data="admin_toggle_buttons_menu"),
-         InlineKeyboardButton("📝 ویرایش قوانین", callback_data="admin_edit_terms")],
-        [InlineKeyboardButton("💸 تغییر قیمت دکمه‌ها", callback_data="admin_change_button_prices")],
-        [InlineKeyboardButton("📊 آمار و لیست کاربران", callback_data="admin_user_stats")],
-        [InlineKeyboardButton("📝 تغییر آیدی پشتیبانی", callback_data="admin_change_support")],
+        [
+            InlineKeyboardButton(
+                "🔒 جویین اجباری کانال", callback_data="admin_toggle_force_join"
+            ),
+            InlineKeyboardButton(
+                "📝 تنظیم کانال اجباری", callback_data="admin_set_force_channel"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "⚙️ تنظیم دکمه‌ها", callback_data="admin_toggle_buttons_menu"
+            ),
+            InlineKeyboardButton("📝 ویرایش قوانین", callback_data="admin_edit_terms"),
+        ],
+        [
+            InlineKeyboardButton(
+                "💸 تغییر قیمت دکمه‌ها", callback_data="admin_change_button_prices"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📊 آمار و لیست کاربران", callback_data="admin_user_stats"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📝 تغییر آیدی پشتیبانی", callback_data="admin_change_support"
+            )
+        ],
         [InlineKeyboardButton("🔄 بروزرسانی", callback_data="toggle_update_mode")],
         [InlineKeyboardButton("🌟 دکمه جدید", callback_data="new_admin_button")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    query.edit_message_text(text, reply_markup=reply_markup)
+    await query.edit_message_text(text, reply_markup=reply_markup)
 
-def toggle_update_mode(update: Update, context: CallbackContext) -> None:
+
+async def toggle_update_mode(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     global BOT_UPDATING
     query = update.callback_query
-    query.answer()
+    await query.answer()
     BOT_UPDATING = not BOT_UPDATING
     status = "فعال" if BOT_UPDATING else "غیرفعال"
-    query.edit_message_text(f"حالت بروزرسانی در ربات اکنون {status} است.")
+    await query.edit_message_text(f"حالت بروزرسانی در ربات اکنون {status} است.")
 
-def admin_pending_balance(update: Update, context: CallbackContext) -> None:
+
+async def admin_pending_balance(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     if not pending_balance_requests:
         text = "هیچ درخواست افزایش موجودی در انتظار تایید وجود ندارد."
     else:
@@ -886,11 +1118,14 @@ def admin_pending_balance(update: Update, context: CallbackContext) -> None:
             text += f"کاربر {uid}: {amount:,} تومان\n"
     keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    query.edit_message_text(text, reply_markup=reply_markup)
+    await query.edit_message_text(text, reply_markup=reply_markup)
 
-def admin_change_button_prices_menu(update: Update, context: CallbackContext) -> None:
+
+async def admin_change_button_prices_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     text = "💸 تغییر قیمت دکمه‌ها:\nلطفاً یکی از موارد زیر را انتخاب کنید:"
     buttons = []
     for plan_id, config in DNS_CONFIGS.items():
@@ -914,16 +1149,19 @@ def admin_change_button_prices_menu(update: Update, context: CallbackContext) ->
             )
         )
     buttons.append(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel_menu"))
-    reply_markup = InlineKeyboardMarkup(InlineKeyboardMarkup([[b] for b in buttons]).inline_keyboard)
-    query.edit_message_text(text, reply_markup=reply_markup)
+    keyboard = InlineKeyboardMarkup([[b] for b in buttons])
+    await query.edit_message_text(text, reply_markup=keyboard)
 
-def admin_change_button_price_handler(update: Update, context: CallbackContext) -> None:
+
+async def admin_change_button_price_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data
     parts = data.split("_")
     if len(parts) < 3:
-        query.edit_message_text("❌ داده‌های نامعتبر.")
+        await query.edit_message_text("❌ داده‌های نامعتبر.")
         return
     product_type = parts[2]
     product_key = parts[3] if len(parts) >= 4 else "default"
@@ -932,11 +1170,12 @@ def admin_change_button_price_handler(update: Update, context: CallbackContext) 
         "product_type": product_type,
         "product_key": product_key,
     }
-    query.edit_message_text("✏️ لطفاً قیمت جدید (به تومان) را وارد کنید:")
+    await query.edit_message_text("✏️ لطفاً قیمت جدید (به تومان) را وارد کنید:")
 
-def admin_user_stats(update: Update, context: CallbackContext) -> None:
+
+async def admin_user_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     lines = []
     total_users = len(all_users)
     total_purchases = sum(len(purchase_history.get(uid, [])) for uid in all_users)
@@ -944,81 +1183,115 @@ def admin_user_stats(update: Update, context: CallbackContext) -> None:
     lines.append("------------------------------------------------")
     for uid in all_users:
         try:
-            chat = context.bot.get_chat(uid)
+            chat = await context.bot.get_chat(uid)
             username = chat.username if chat.username else "-"
         except Exception:
             username = "-"
         ref_points = referral_points.get(uid, 0)
         purchase_count = len(purchase_history.get(uid, []))
         balance_val = user_balance.get(uid, 0)
-        lines.append(f"آیدی: {uid} | یوزرنیم: {username} | امتیاز: {ref_points} | خرید: {purchase_count} | موجودی: {balance_val:,} تومان")
+        lines.append(
+            f"آیدی: {uid} | یوزرنیم: {username} | امتیاز: {ref_points} | خرید: {purchase_count} | موجودی: {balance_val:,} تومان"
+        )
     file_data = "\n".join(lines)
     bio = io.BytesIO(file_data.encode("utf-8"))
     bio.name = "user_stats.txt"
-    query.edit_message_text("در حال ارسال فایل آمار کاربران...")
-    context.bot.send_document(chat_id=query.from_user.id, document=bio, filename="user_stats.txt", caption="آمار کاربران")
+    await query.edit_message_text("در حال ارسال فایل آمار کاربران...")
+    await context.bot.send_document(
+        chat_id=query.from_user.id,
+        document=bio,
+        filename="user_stats.txt",
+        caption="آمار کاربران",
+    )
 
-def admin_modify_balance_prompt(update: Update, context: CallbackContext) -> None:
+
+async def admin_modify_balance_prompt(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     admin_id = query.from_user.id
     if admin_id not in admin_ids:
-        query.edit_message_text("❌ دسترسی ندارید.")
+        await query.edit_message_text("❌ دسترسی ندارید.")
         return
     admin_state[admin_id] = {"operation": "modify_balance", "step": "awaiting_user_id"}
-    query.edit_message_text("✏️ لطفاً آیدی کاربر مورد نظر را (به صورت عددی) ارسال کنید.\nبرای انصراف، /cancel را بزنید.")
+    await query.edit_message_text(
+        "✏️ لطفاً آیدی کاربر مورد نظر را (به صورت عددی) ارسال کنید.\nبرای انصراف، /cancel را بزنید."
+    )
 
-def admin_block_user(update: Update, context: CallbackContext) -> None:
+
+async def admin_block_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     admin_id = query.from_user.id
     if admin_id not in admin_ids:
-        query.edit_message_text("❌ دسترسی ندارید.")
+        await query.edit_message_text("❌ دسترسی ندارید.")
         return
     admin_state[admin_id] = {"operation": "block_user"}
-    query.edit_message_text("🚫 لطفاً آیدی کاربر مورد نظر برای مسدودسازی را ارسال کنید.")
+    await query.edit_message_text(
+        "🚫 لطفاً آیدی کاربر مورد نظر برای مسدودسازی را ارسال کنید."
+    )
 
-def admin_unblock_user(update: Update, context: CallbackContext) -> None:
+
+async def admin_unblock_user(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     admin_id = query.from_user.id
     if admin_id not in admin_ids:
-        query.edit_message_text("❌ دسترسی ندارید.")
+        await query.edit_message_text("❌ دسترسی ندارید.")
         return
     admin_state[admin_id] = {"operation": "unblock_user"}
-    query.edit_message_text("✅ لطفاً آیدی کاربر مورد نظر برای لغو مسدودسازی را ارسال کنید.")
+    await query.edit_message_text(
+        "✅ لطفاً آیدی کاربر مورد نظر برای لغو مسدودسازی را ارسال کنید."
+    )
 
-def admin_mass_message(update: Update, context: CallbackContext) -> None:
+
+async def admin_mass_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     admin_id = query.from_user.id
     if admin_id not in admin_ids:
-        query.edit_message_text("❌ دسترسی ندارید.")
+        await query.edit_message_text("❌ دسترسی ندارید.")
         return
     admin_state[admin_id] = {"operation": "mass_message"}
-    query.edit_message_text("📢 لطفاً متن پیام همگانی را ارسال کنید.")
+    await query.edit_message_text("📢 لطفاً متن پیام همگانی را ارسال کنید.")
 
-def admin_toggle_force_join(update: Update, context: CallbackContext) -> None:
+
+async def admin_toggle_force_join(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     global FORCE_JOIN_ENABLED
     FORCE_JOIN_ENABLED = not FORCE_JOIN_ENABLED
     status = "فعال" if FORCE_JOIN_ENABLED else "غیرفعال"
-    query.edit_message_text(f"🔒 وضعیت جویین اجباری کانال به {status} تغییر یافت.")
+    await query.edit_message_text(f"🔒 وضعیت جویین اجباری کانال به {status} تغییر یافت.")
 
-def admin_set_force_channel(update: Update, context: CallbackContext) -> None:
+
+async def admin_set_force_channel(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     admin_id = query.from_user.id
     if admin_id not in admin_ids:
-        query.edit_message_text("❌ دسترسی ندارید.")
+        await query.edit_message_text("❌ دسترسی ندارید.")
         return
     admin_state[admin_id] = {"operation": "set_force_channel"}
-    query.edit_message_text("📝 لطفاً پیام فوروارد شده از کانال یا آیدی عمومی کانال (مثلاً @amir) را ارسال کنید:")
+    await query.edit_message_text(
+        "📝 لطفاً پیام فوروارد شده از کانال یا آیدی عمومی کانال (مثلاً @amir) را ارسال کنید:"
+    )
 
-def admin_toggle_buttons_menu(update: Update, context: CallbackContext) -> None:
+
+async def admin_toggle_buttons_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     text = "⚙️ تنظیم دکمه‌های منوی اصلی:\n"
     text += f"🛒 خرید DNS اختصاصی: {'فعال' if ENABLE_DNS_BUTTON else 'غیرفعال'}\n"
     text += f"👤 حساب کاربری: {'فعال' if ENABLE_ACCOUNT_BUTTON else 'غیرفعال'}\n"
@@ -1028,89 +1301,131 @@ def admin_toggle_buttons_menu(update: Update, context: CallbackContext) -> None:
     text += f"💻 خرید یوزرپسورد سایت: {'فعال' if ENABLE_SITE_SUBSCRIPTION_BUTTON else 'غیرفعال'}\n"
     keyboard = [
         [InlineKeyboardButton("🔄 تغییر وضعیت خرید DNS", callback_data="toggle_dns")],
-        [InlineKeyboardButton("🔄 تغییر وضعیت حساب کاربری", callback_data="toggle_account")],
-        [InlineKeyboardButton("🔄 تغییر وضعیت افزایش موجودی", callback_data="toggle_balance")],
+        [
+            InlineKeyboardButton(
+                "🔄 تغییر وضعیت حساب کاربری", callback_data="toggle_account"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 تغییر وضعیت افزایش موجودی", callback_data="toggle_balance"
+            )
+        ],
         [InlineKeyboardButton("🔄 تغییر وضعیت رفرال", callback_data="toggle_referral")],
-        [InlineKeyboardButton("🔄 تغییر وضعیت وایرگارد", callback_data="toggle_wireguard")],
-        [InlineKeyboardButton("🔄 تغییر وضعیت خرید سایت", callback_data="toggle_site_subscription")],
+        [
+            InlineKeyboardButton(
+                "🔄 تغییر وضعیت وایرگارد", callback_data="toggle_wireguard"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 تغییر وضعیت خرید سایت", callback_data="toggle_site_subscription"
+            )
+        ],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    query.edit_message_text(text, reply_markup=reply_markup)
+    await query.edit_message_text(text, reply_markup=reply_markup)
 
-def toggle_dns(update: Update, context: CallbackContext) -> None:
+
+async def toggle_dns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global ENABLE_DNS_BUTTON
     ENABLE_DNS_BUTTON = not ENABLE_DNS_BUTTON
-    admin_toggle_buttons_menu(update, context)
+    await admin_toggle_buttons_menu(update, context)
 
-def toggle_account(update: Update, context: CallbackContext) -> None:
+
+async def toggle_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global ENABLE_ACCOUNT_BUTTON
     ENABLE_ACCOUNT_BUTTON = not ENABLE_ACCOUNT_BUTTON
-    admin_toggle_buttons_menu(update, context)
+    await admin_toggle_buttons_menu(update, context)
 
-def toggle_balance(update: Update, context: CallbackContext) -> None:
+
+async def toggle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global ENABLE_BALANCE_BUTTON
     ENABLE_BALANCE_BUTTON = not ENABLE_BALANCE_BUTTON
-    admin_toggle_buttons_menu(update, context)
+    await admin_toggle_buttons_menu(update, context)
 
-def toggle_referral(update: Update, context: CallbackContext) -> None:
+
+async def toggle_referral(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global ENABLE_REFERRAL_BUTTON
     ENABLE_REFERRAL_BUTTON = not ENABLE_REFERRAL_BUTTON
-    admin_toggle_buttons_menu(update, context)
+    await admin_toggle_buttons_menu(update, context)
 
-def toggle_wireguard(update: Update, context: CallbackContext) -> None:
+
+async def toggle_wireguard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     global ENABLE_WIREGUARD_BUTTON
     ENABLE_WIREGUARD_BUTTON = not ENABLE_WIREGUARD_BUTTON
-    admin_toggle_buttons_menu(update, context)
+    await admin_toggle_buttons_menu(update, context)
 
-def toggle_site_subscription(update: Update, context: CallbackContext) -> None:
+
+async def toggle_site_subscription(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     global ENABLE_SITE_SUBSCRIPTION_BUTTON
     ENABLE_SITE_SUBSCRIPTION_BUTTON = not ENABLE_SITE_SUBSCRIPTION_BUTTON
-    admin_toggle_buttons_menu(update, context)
+    await admin_toggle_buttons_menu(update, context)
 
-def admin_edit_terms(update: Update, context: CallbackContext) -> None:
+
+async def admin_edit_terms(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     admin_id = query.from_user.id
     if admin_id not in admin_ids:
-        query.edit_message_text("❌ دسترسی ندارید.")
+        await query.edit_message_text("❌ دسترسی ندارید.")
         return
     admin_state[admin_id] = {"operation": "update_terms"}
-    query.edit_message_text("✏️ لطفاً متن جدید قوانین و مقررات را ارسال کنید:")
+    await query.edit_message_text("✏️ لطفاً متن جدید قوانین و مقررات را ارسال کنید:")
 
-def new_admin_button_handler(update: Update, context: CallbackContext) -> None:
-    query = update.callback_query
-    query.answer()
-    query.edit_message_text("این دکمه جدید از پنل ادمین است.")
 
-def admin_change_support(update: Update, context: CallbackContext) -> None:
+async def new_admin_button_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
+    await query.edit_message_text("این دکمه جدید از پنل ادمین است.")
+
+
+async def admin_change_support(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
     admin_state[query.from_user.id] = {"operation": "change_support"}
-    query.edit_message_text("✏️ لطفاً آیدی پشتیبانی جدید (به عنوان مثال: @NewSupportID) را ارسال کنید:")
+    await query.edit_message_text(
+        "✏️ لطفاً آیدی پشتیبانی جدید (به عنوان مثال: @NewSupportID) را ارسال کنید:"
+    )
 
-def admin_command(update: Update, context: CallbackContext) -> None:
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in admin_ids:
         if context.args and context.args[0] == ADMIN_PASSWORD:
             admin_ids.add(user_id)
-            update.message.reply_text("✅ شما به عنوان ادمین ثبت شدید.")
+            await update.message.reply_text("✅ شما به عنوان ادمین ثبت شدید.")
         else:
-            update.message.reply_text("❌ دسترسی غیرمجاز. برای ورود رمز عبور را همراه /admin ارسال کنید. مثال: /admin 1")
+            await update.message.reply_text(
+                "❌ دسترسی غیرمجاز. برای ورود رمز عبور را همراه /admin ارسال کنید. مثال: /admin 1"
+            )
             return
-    keyboard = [[InlineKeyboardButton("⚙️ پنل ادمین", callback_data="admin_panel_menu")]]
+    keyboard = [
+        [InlineKeyboardButton("⚙️ پنل ادمین", callback_data="admin_panel_menu")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("به پنل ادمین خوش آمدید.", reply_markup=reply_markup)
+    await update.message.reply_text(
+        "به پنل ادمین خوش آمدید.", reply_markup=reply_markup
+    )
 
-def admin_cancel(update: Update, context: CallbackContext) -> None:
+
+async def admin_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     admin_id = update.effective_user.id
     if admin_id in admin_state:
         del admin_state[admin_id]
-        update.message.reply_text("❌ عملیات لغو شد.")
+    await update.message.reply_text("❌ عملیات لغو شد.")
 
-def convert_referral(update: Update, context: CallbackContext) -> None:
+
+async def convert_referral(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     user_id = query.from_user.id
     points = referral_points.get(user_id, 0)
     if points > 0:
@@ -1118,19 +1433,26 @@ def convert_referral(update: Update, context: CallbackContext) -> None:
         user_balance[user_id] = user_balance.get(user_id, 0) + credit
         save_balance()
         referral_points[user_id] = 0
-        query.edit_message_text(f"✅ {points} امتیاز به مبلغ {credit:,} تومان به موجودی شما اضافه شد.")
+        await query.edit_message_text(
+            f"✅ {points} امتیاز به مبلغ {credit:,} تومان به موجودی شما اضافه شد."
+        )
     else:
-        query.edit_message_text("❌ امتیاز کافی برای تبدیل موجودی ندارید.")
+        await query.edit_message_text("❌ امتیاز کافی برای تبدیل موجودی ندارید.")
+
 
 # ------------------ هندلر پیام‌های متنی (text_message_handler) ------------------
-def text_message_handler(update: Update, context: CallbackContext) -> None:
+async def text_message_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     user_id = update.effective_user.id
     text = update.message.text.strip()
     if user_id in awaiting_custom_balance:
         try:
             amount = int(text)
             if amount < 10000 or amount > 1000000:
-                update.message.reply_text("❌ مقدار انتخاب شده خارج از محدوده مجاز است.")
+                await update.message.reply_text(
+                    "❌ مقدار انتخاب شده خارج از محدوده مجاز است."
+                )
                 return
             pending_balance_requests[user_id] = amount
             del awaiting_custom_balance[user_id]
@@ -1141,13 +1463,20 @@ def text_message_handler(update: Update, context: CallbackContext) -> None:
                 "سپس رسید پرداخت را به صورت عکس ارسال کنید و روی دکمه '💳 ارسال درخواست افزایش موجودی' کلیک کنید."
             )
             keyboard = [
-                [InlineKeyboardButton("💳 ارسال درخواست افزایش موجودی", callback_data="balance_request_confirm")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+                [
+                    InlineKeyboardButton(
+                        "💳 ارسال درخواست افزایش موجودی",
+                        callback_data="balance_request_confirm",
+                    )
+                ],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            update.message.reply_text(payment_text, reply_markup=reply_markup, parse_mode="HTML")
+            await update.message.reply_text(
+                payment_text, reply_markup=reply_markup, parse_mode="HTML"
+            )
         except ValueError:
-            update.message.reply_text("❌ مقدار وارد شده معتبر نیست.")
+            await update.message.reply_text("❌ مقدار وارد شده معتبر نیست.")
         return
 
     if user_id in admin_state:
@@ -1159,33 +1488,43 @@ def text_message_handler(update: Update, context: CallbackContext) -> None:
                     target_user = int(text)
                     admin_state[user_id]["target_user"] = target_user
                     admin_state[user_id]["step"] = "awaiting_amount"
-                    update.message.reply_text("✏️ لطفاً مبلغ تغییر موجودی (مثبت یا منفی) را وارد کنید:")
+                    await update.message.reply_text(
+                        "✏️ لطفاً مبلغ تغییر موجودی (مثبت یا منفی) را وارد کنید:"
+                    )
                 except ValueError:
-                    update.message.reply_text("❌ آیدی معتبر نیست. لطفاً عدد وارد کنید.")
+                    await update.message.reply_text(
+                        "❌ آیدی معتبر نیست. لطفاً عدد وارد کنید."
+                    )
             elif state.get("step") == "awaiting_amount":
                 try:
                     amount = int(text)
                     target_user = admin_state[user_id].get("target_user")
                     if target_user is None:
-                        update.message.reply_text("❌ خطا در دریافت آیدی کاربر.")
+                        await update.message.reply_text("❌ خطا در دریافت آیدی کاربر.")
                         del admin_state[user_id]
                         return
-                    user_balance[target_user] = user_balance.get(target_user, 0) + amount
+                    user_balance[target_user] = (
+                        user_balance.get(target_user, 0) + amount
+                    )
                     save_balance()
-                    update.message.reply_text(f"✅ موجودی کاربر {target_user} تغییر یافت. مبلغ تغییر: {amount:,} تومان")
+                    await update.message.reply_text(
+                        f"✅ موجودی کاربر {target_user} تغییر یافت. مبلغ تغییر: {amount:,} تومان"
+                    )
                     del admin_state[user_id]
                 except ValueError:
-                    update.message.reply_text("❌ مقدار وارد شده معتبر نیست. لطفاً عدد وارد کنید.")
+                    await update.message.reply_text(
+                        "❌ مقدار وارد شده معتبر نیست. لطفاً عدد وارد کنید."
+                    )
             return
 
         elif operation == "block_user":
             try:
                 target_user = int(text)
                 blocked_users.add(target_user)
-                update.message.reply_text(f"🚫 کاربر {target_user} مسدود شد.")
+                await update.message.reply_text(f"🚫 کاربر {target_user} مسدود شد.")
                 del admin_state[user_id]
             except ValueError:
-                update.message.reply_text("❌ آیدی معتبر نیست.")
+                await update.message.reply_text("❌ آیدی معتبر نیست.")
             return
 
         elif operation == "unblock_user":
@@ -1193,12 +1532,14 @@ def text_message_handler(update: Update, context: CallbackContext) -> None:
                 target_user = int(text)
                 if target_user in blocked_users:
                     blocked_users.remove(target_user)
-                    update.message.reply_text(f"✅ کاربر {target_user} از لیست مسدود شده‌ها حذف شد.")
+                    await update.message.reply_text(
+                        f"✅ کاربر {target_user} از لیست مسدود شده‌ها حذف شد."
+                    )
                 else:
-                    update.message.reply_text("❌ این کاربر مسدود نیست.")
+                    await update.message.reply_text("❌ این کاربر مسدود نیست.")
                 del admin_state[user_id]
             except ValueError:
-                update.message.reply_text("❌ آیدی معتبر نیست.")
+                await update.message.reply_text("❌ آیدی معتبر نیست.")
             return
 
         elif operation == "mass_message":
@@ -1206,25 +1547,27 @@ def text_message_handler(update: Update, context: CallbackContext) -> None:
             count = 0
             for uid in all_users:
                 try:
-                    context.bot.send_message(chat_id=uid, text=message_text)
+                    await context.bot.send_message(chat_id=uid, text=message_text)
                     count += 1
                 except Exception as e:
                     logger.error(f"Error sending mass message to {uid}: {e}")
-            update.message.reply_text(f"✅ پیام همگانی ارسال شد به {count} کاربر.")
+            await update.message.reply_text(f"✅ پیام همگانی ارسال شد به {count} کاربر.")
             del admin_state[user_id]
             return
 
         elif operation == "set_force_channel":
             global FORCE_JOIN_CHANNEL
             FORCE_JOIN_CHANNEL = text
-            update.message.reply_text(f"✅ کانال اجباری تنظیم شد: {FORCE_JOIN_CHANNEL}")
+            await update.message.reply_text(
+                f"✅ کانال اجباری تنظیم شد: {FORCE_JOIN_CHANNEL}"
+            )
             del admin_state[user_id]
             return
 
         elif operation == "update_terms":
             global TERMS_TEXT
             TERMS_TEXT = text
-            update.message.reply_text("✅ قوانین و مقررات به‌روزرسانی شد.")
+            await update.message.reply_text("✅ قوانین و مقررات به‌روزرسانی شد.")
             del admin_state[user_id]
             return
 
@@ -1236,102 +1579,191 @@ def text_message_handler(update: Update, context: CallbackContext) -> None:
                 if product_type == "dns":
                     if product_key in DNS_CONFIGS:
                         DNS_CONFIGS[product_key]["price"] = new_price
-                        update.message.reply_text(f"✅ قیمت DNS ({DNS_CONFIGS[product_key]['name']}) به {new_price:,} تومان تغییر یافت.")
+                        await update.message.reply_text(
+                            f"✅ قیمت DNS ({DNS_CONFIGS[product_key]['name']}) به {new_price:,} تومان تغییر یافت."
+                        )
                     else:
-                        update.message.reply_text("❌ پلن DNS نامعتبر.")
+                        await update.message.reply_text("❌ پلن DNS نامعتبر.")
                 elif product_type == "wireguard":
                     global WIREGUARD_PRICE
                     WIREGUARD_PRICE = new_price
-                    update.message.reply_text(f"✅ قیمت وایرگارد به {new_price:,} تومان تغییر یافت.")
+                    await update.message.reply_text(
+                        f"✅ قیمت وایرگارد به {new_price:,} تومان تغییر یافت."
+                    )
                 elif product_type == "site":
                     if product_key in SITE_SUBSCRIPTION_PLANS:
                         SITE_SUBSCRIPTION_PLANS[product_key]["price"] = new_price
-                        update.message.reply_text(f"✅ قیمت اشتراک {SITE_SUBSCRIPTION_PLANS[product_key]['name']} به {new_price:,} تومان تغییر یافت.")
+                        await update.message.reply_text(
+                            f"✅ قیمت اشتراک {SITE_SUBSCRIPTION_PLANS[product_key]['name']} به {new_price:,} تومان تغییر یافت."
+                        )
                     else:
-                        update.message.reply_text("❌ پلن اشتراک نامعتبر.")
+                        await update.message.reply_text("❌ پلن اشتراک نامعتبر.")
                 else:
-                    update.message.reply_text("❌ نوع محصول نامعتبر.")
+                    await update.message.reply_text("❌ نوع محصول نامعتبر.")
                 del admin_state[user_id]
             except ValueError:
-                update.message.reply_text("❌ مقدار وارد شده معتبر نیست. لطفاً عدد وارد کنید.")
+                await update.message.reply_text(
+                    "❌ مقدار وارد شده معتبر نیست. لطفاً عدد وارد کنید."
+                )
             return
 
         elif operation == "change_support":
             global SUPPORT_ID
             SUPPORT_ID = text.strip()
-            update.message.reply_text(f"✅ آیدی پشتیبانی به {SUPPORT_ID} تغییر یافت.")
+            await update.message.reply_text(
+                f"✅ آیدی پشتیبانی به {SUPPORT_ID} تغییر یافت."
+            )
             del admin_state[user_id]
             return
 
     if user_id in awaiting_discount_code:
-        handle_discount_code_text(update, context)
+        await handle_discount_code_text(update, context)
         return
 
-    update.message.reply_text("❌ دستور نامعتبر یا موردی جهت پردازش یافت نشد.")
+    await update.message.reply_text("❌ دستور نامعتبر یا موردی جهت پردازش یافت نشد.")
+
 
 # ------------------ ثبت هندلرها ------------------
 def main() -> None:
     TOKEN = "7487680597:AAG-D9C8jlqQ4se4yV9ozxIOx9Z1bVGDfBk"  # جایگزین کنید با توکن واقعی ربات شما
     load_balance()
     load_history()
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+    app = ApplicationBuilder().token(TOKEN).build()
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("admin", admin_command))
-    dp.add_handler(CommandHandler("cancel", admin_cancel))
-    dp.add_handler(CommandHandler("account", account_menu))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("cancel", admin_cancel))
+    app.add_handler(CommandHandler("account", account_menu))
 
-    dp.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
-    dp.add_handler(CallbackQueryHandler(dns_menu, pattern="^dns_menu$"))
-    dp.add_handler(CallbackQueryHandler(buy_dns_plan, pattern="^buy_dnsplan_.*"))
-    dp.add_handler(CallbackQueryHandler(account_menu, pattern="^account_menu$"))
-    dp.add_handler(CallbackQueryHandler(balance_increase_menu, pattern="^balance_increase$"))
-    dp.add_handler(CallbackQueryHandler(ask_custom_balance, pattern="^balance_increase_custom$"))
-    dp.add_handler(CallbackQueryHandler(handle_balance_increase_request, pattern="^balance_increase_.*"))
-    dp.add_handler(CallbackQueryHandler(balance_request_confirm, pattern="^balance_request_confirm$"))
-    dp.add_handler(CallbackQueryHandler(confirm_receipt, pattern="^confirm_receipt$"))
-    dp.add_handler(CallbackQueryHandler(admin_approve_purchase, pattern="^admin_approve_purchase_.*"))
-    dp.add_handler(CallbackQueryHandler(admin_reject_purchase, pattern="^admin_reject_purchase_.*"))
-    dp.add_handler(CallbackQueryHandler(approve_balance, pattern="^approve_balance_.*"))
-    dp.add_handler(CallbackQueryHandler(reject_balance, pattern="^reject_balance_.*"))
-    dp.add_handler(CallbackQueryHandler(admin_panel_menu, pattern="^admin_panel_menu$"))
-    dp.add_handler(CallbackQueryHandler(admin_pending_balance, pattern="^admin_pending_balance$"))
-    dp.add_handler(CallbackQueryHandler(apply_discount_prompt, pattern="^apply_discount$"))
-    dp.add_handler(CallbackQueryHandler(admin_modify_balance_prompt, pattern="^admin_modify_balance$"))
-    dp.add_handler(CallbackQueryHandler(convert_referral, pattern="^convert_referral$"))
-    dp.add_handler(CallbackQueryHandler(admin_block_user, pattern="^admin_block_user$"))
-    dp.add_handler(CallbackQueryHandler(admin_unblock_user, pattern="^admin_unblock_user$"))
-    dp.add_handler(CallbackQueryHandler(admin_mass_message, pattern="^admin_mass_message$"))
-    dp.add_handler(CallbackQueryHandler(admin_toggle_force_join, pattern="^admin_toggle_force_join$"))
-    dp.add_handler(CallbackQueryHandler(admin_set_force_channel, pattern="^admin_set_force_channel$"))
-    dp.add_handler(CallbackQueryHandler(referral_menu, pattern="^referral_menu$"))
-    dp.add_handler(CallbackQueryHandler(wireguard_menu, pattern="^wireguard_menu$"))
-    dp.add_handler(CallbackQueryHandler(admin_toggle_buttons_menu, pattern="^admin_toggle_buttons_menu$"))
-    dp.add_handler(CallbackQueryHandler(toggle_dns, pattern="^toggle_dns$"))
-    dp.add_handler(CallbackQueryHandler(toggle_account, pattern="^toggle_account$"))
-    dp.add_handler(CallbackQueryHandler(toggle_balance, pattern="^toggle_balance$"))
-    dp.add_handler(CallbackQueryHandler(toggle_referral, pattern="^toggle_referral$"))
-    dp.add_handler(CallbackQueryHandler(toggle_wireguard, pattern="^toggle_wireguard$"))
-    dp.add_handler(CallbackQueryHandler(toggle_site_subscription, pattern="^toggle_site_subscription$"))
-    dp.add_handler(CallbackQueryHandler(admin_edit_terms, pattern="^admin_edit_terms$"))
-    dp.add_handler(CallbackQueryHandler(new_admin_button_handler, pattern="^new_admin_button$"))
-    dp.add_handler(CallbackQueryHandler(admin_change_button_prices_menu, pattern="^admin_change_button_prices$"))
-    dp.add_handler(CallbackQueryHandler(admin_change_button_price_handler, pattern="^change_price_.*"))
-    dp.add_handler(CallbackQueryHandler(admin_user_stats, pattern="^admin_user_stats$"))
-    dp.add_handler(CallbackQueryHandler(support_menu, pattern="^support_menu$"))
-    dp.add_handler(CallbackQueryHandler(terms_and_conditions, pattern="^terms$"))
-    dp.add_handler(CallbackQueryHandler(site_subscription_menu, pattern="^site_subscription_menu$"))
-    dp.add_handler(CallbackQueryHandler(buy_site_subscription, pattern="^buy_site_subscription_.*"))
-    dp.add_handler(CallbackQueryHandler(toggle_update_mode, pattern="^toggle_update_mode$"))
-    dp.add_handler(CallbackQueryHandler(admin_change_support, pattern="^admin_change_support$"))
+    app.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
+    app.add_handler(CallbackQueryHandler(dns_menu, pattern="^dns_menu$"))
+    app.add_handler(CallbackQueryHandler(buy_dns_plan, pattern="^buy_dnsplan_.*"))
+    app.add_handler(CallbackQueryHandler(account_menu, pattern="^account_menu$"))
+    app.add_handler(
+        CallbackQueryHandler(balance_increase_menu, pattern="^balance_increase$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(ask_custom_balance, pattern="^balance_increase_custom$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_balance_increase_request, pattern="^balance_increase_.*"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            balance_request_confirm, pattern="^balance_request_confirm$"
+        )
+    )
+    app.add_handler(CallbackQueryHandler(confirm_receipt, pattern="^confirm_receipt$"))
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_approve_purchase, pattern="^admin_approve_purchase_.*"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_reject_purchase, pattern="^admin_reject_purchase_.*")
+    )
+    app.add_handler(
+        CallbackQueryHandler(approve_balance, pattern="^approve_balance_.*")
+    )
+    app.add_handler(CallbackQueryHandler(reject_balance, pattern="^reject_balance_.*"))
+    app.add_handler(
+        CallbackQueryHandler(admin_panel_menu, pattern="^admin_panel_menu$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_pending_balance, pattern="^admin_pending_balance$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(apply_discount_prompt, pattern="^apply_discount$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_modify_balance_prompt, pattern="^admin_modify_balance$"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(convert_referral, pattern="^convert_referral$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_block_user, pattern="^admin_block_user$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_unblock_user, pattern="^admin_unblock_user$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_mass_message, pattern="^admin_mass_message$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_toggle_force_join, pattern="^admin_toggle_force_join$"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_set_force_channel, pattern="^admin_set_force_channel$"
+        )
+    )
+    app.add_handler(CallbackQueryHandler(referral_menu, pattern="^referral_menu$"))
+    app.add_handler(CallbackQueryHandler(wireguard_menu, pattern="^wireguard_menu$"))
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_toggle_buttons_menu, pattern="^admin_toggle_buttons_menu$"
+        )
+    )
+    app.add_handler(CallbackQueryHandler(toggle_dns, pattern="^toggle_dns$"))
+    app.add_handler(CallbackQueryHandler(toggle_account, pattern="^toggle_account$"))
+    app.add_handler(CallbackQueryHandler(toggle_balance, pattern="^toggle_balance$"))
+    app.add_handler(CallbackQueryHandler(toggle_referral, pattern="^toggle_referral$"))
+    app.add_handler(
+        CallbackQueryHandler(toggle_wireguard, pattern="^toggle_wireguard$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            toggle_site_subscription, pattern="^toggle_site_subscription$"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_edit_terms, pattern="^admin_edit_terms$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(new_admin_button_handler, pattern="^new_admin_button$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_change_button_prices_menu, pattern="^admin_change_button_prices$"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_change_button_price_handler, pattern="^change_price_.*"
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_user_stats, pattern="^admin_user_stats$")
+    )
+    app.add_handler(CallbackQueryHandler(support_menu, pattern="^support_menu$"))
+    app.add_handler(CallbackQueryHandler(terms_and_conditions, pattern="^terms$"))
+    app.add_handler(
+        CallbackQueryHandler(site_subscription_menu, pattern="^site_subscription_menu$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(buy_site_subscription, pattern="^buy_site_subscription_.*")
+    )
+    app.add_handler(
+        CallbackQueryHandler(toggle_update_mode, pattern="^toggle_update_mode$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(admin_change_support, pattern="^admin_change_support$")
+    )
 
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, text_message_handler))
-    dp.add_handler(MessageHandler(Filters.photo, receipt_photo_handler))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler)
+    )
+    app.add_handler(MessageHandler(filters.PHOTO, receipt_photo_handler))
 
-    updater.start_polling()
-    logger.info("✅ Bot has deployed successfully.")
-    updater.idle()
+    app.run_polling()
+
 
 if __name__ == "__main__":
     main()
