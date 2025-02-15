@@ -1275,7 +1275,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # ------------------ ثبت هندلرها ------------------
 def main() -> None:
-    TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"  # جایگزین کنید با توکن واقعی ربات شما
+    TOKEN = "7487680597:AAG-D9C8jlqQ4se4yV9ozxIOx9Z1bVGDfBk"  # جایگزین کنید با توکن واقعی ربات شما
     load_balance()
     load_history()
     app = ApplicationBuilder().token(TOKEN).build()
